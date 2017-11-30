@@ -1,9 +1,6 @@
-#![feature(link_llvm_intrinsics)]
+#![feature(link_llvm_intrinsics, allocator_api)]
 
 use std::mem;
-use std::ptr;
-
-const PAGE_SIZE: usize = 64 * 1024;
 
 pub struct Stack {
     head: *mut Node,
@@ -11,12 +8,12 @@ pub struct Stack {
 
 struct Node {
     next: *mut Node,
-    data: [u64; PAGE_SIZE / 8 - 1],
+    data: [u64; page::PAGE_SIZE / 8 - 1],
 }
 
 impl Stack {
     pub fn new() -> Stack {
-        Stack { head: alloc() }
+        Stack { head: page::alloc() as *mut Node }
     }
 
     pub fn into_usize(self) -> usize {
@@ -24,14 +21,16 @@ impl Stack {
     }
 
     pub unsafe fn free_usize(stack: usize) {
-        // sadface :(
-        drop(stack);
+        drop(Stack { head: stack as *mut Node });
     }
 
     pub unsafe fn with_stack<F, R>(stack: usize, f: F) -> R
         where F: FnOnce(&mut Stack) -> R
     {
-        f(&mut Stack { head: stack as *mut Node })
+        let mut tmp = Stack { head: stack as *mut Node };
+        let ret = f(&mut tmp);
+        mem::forget(tmp);
+        return ret
     }
 
     pub fn copy(&mut self, from: u32, to: u32) -> Result<(), ()> {
@@ -49,7 +48,7 @@ impl Stack {
             while at >= (*cur).data.len() {
                 at -= (*cur).data.len();
                 if (*cur).next.is_null() {
-                    (*cur).next = alloc();
+                    (*cur).next = page::alloc() as *mut Node;
                 }
                 cur = (*cur).next;
             }
@@ -93,7 +92,7 @@ impl Stack {
 impl Clone for Stack {
     fn clone(&self) -> Stack {
         unsafe {
-            let ret = Stack { head: alloc() };
+            let ret = Stack { head: page::alloc() as *mut Node };
             let mut a = ret.head;
             let mut b = self.head;
             loop {
@@ -102,7 +101,7 @@ impl Clone for Stack {
                     break
                 }
                 b = (*b).next;
-                (*a).next = alloc();
+                (*a).next = page::alloc() as *mut Node;
                 a = (*a).next;
             }
             return ret
@@ -110,9 +109,29 @@ impl Clone for Stack {
     }
 }
 
-fn alloc() -> *mut Node {
-    if mem::size_of::<Node>() > PAGE_SIZE {
-        return ptr::null_mut()
+impl Drop for Stack {
+    fn drop(&mut self) {
+        unsafe {
+            let mut cur = self.head;
+            while !cur.is_null() {
+                let next = (*cur).next;
+                page::free(cur as *mut page::Page);
+                cur = next;
+            }
+        }
+    }
+}
+
+mod page {
+    use std::heap::{Alloc, Heap, AllocErr};
+
+    pub const PAGE_SIZE: usize = 64 * 1024;
+    pub type Page = [u8; PAGE_SIZE];
+
+    static mut NEXT_FREE: *mut List = 0 as *mut _;
+
+    struct List {
+        next: *mut List,
     }
 
     extern {
@@ -126,9 +145,26 @@ fn alloc() -> *mut Node {
         fn grow_memory(pages: u32);
     }
 
-    unsafe {
-        let cur = current_memory() as usize;
-        grow_memory(1);
-        (cur * PAGE_SIZE) as *mut Node
+    pub fn alloc() -> *mut Page {
+        unsafe {
+            if NEXT_FREE.is_null() {
+                let cur = current_memory() as usize;
+                grow_memory(1);
+                if current_memory() as usize == cur {
+                    Heap.oom(AllocErr::invalid_input("oom"))
+                }
+                (cur * PAGE_SIZE) as *mut Page
+            } else {
+                let ret = NEXT_FREE;
+                NEXT_FREE = (*ret).next;
+                ret as *mut Page
+            }
+        }
+    }
+
+    pub unsafe fn free(page: *mut Page) {
+        let page = page as *mut List;
+        (*page).next = NEXT_FREE;
+        NEXT_FREE = page;
     }
 }

@@ -24,5 +24,5 @@ size for each of these implementations is:
 |---------------|------------------|
 | naive   |   15551 |
 | hand-optimzied | 3343 |
-| crazy | 645 |
+| crazy | 711 |
 
