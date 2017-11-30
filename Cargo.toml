@@ -1,0 +1,22 @@
+[package]
+name = "stack"
+version = "0.1.0"
+authors = ["Alex Crichton <alex@alexcrichton.com>"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+
+[dependencies]
+naive = { path = "naive" }
+hand-optimized-vec = { path = "hand-optimized-vec" }
+crazy = { path = "crazy", optional = true }
+cfg-if = "0.1"
+
+[features]
+hand-optimized = []
+
+[profile.release]
+opt-level = 's'
+lto = true
